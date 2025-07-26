@@ -10,10 +10,14 @@ use args::Args;
 mod api_types;
 use api_types::{TokenResponse, UserInfoResponse};
 
-struct PamOidcDirectGrant;
+struct PamKeycloak;
 
-impl PamServiceModule for PamOidcDirectGrant {
-    fn authenticate(pamh: pamsm::Pam, flags: pamsm::PamFlags, args: Vec<String>) -> pamsm::PamError {
+impl PamServiceModule for PamKeycloak {
+    fn authenticate(
+        pamh: pamsm::Pam,
+        flags: pamsm::PamFlags,
+        args: Vec<String>,
+    ) -> pamsm::PamError {
         match authenticate(pamh, flags, args) {
             Ok(r) | Err(r) => r,
         }
@@ -28,7 +32,7 @@ impl PamServiceModule for PamOidcDirectGrant {
     }
 
     fn open_session(_: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
-        // TODO Maybe create home directory here and set UID and group?
+        // TODO Set UID on Keycloak
         PamError::SUCCESS
     }
 
@@ -64,21 +68,17 @@ fn authenticate(
 
     // Read or prompt for username
     let username = pamh.get_user(None)?.ok_or(PamError::AUTHINFO_UNAVAIL)?;
-    let username = username.to_string_lossy().to_owned();
+    let username = username.to_string_lossy();
 
     // Read or prompt for password
     let password = pamh.get_authtok(None)?.ok_or(PamError::AUTHINFO_UNAVAIL)?;
-    let password = password.to_string_lossy().to_owned();
+    let password = password.to_string_lossy();
 
     // Prompt for TOTP
     let totp = pamh
         .conv(Some("Multi-factor code: "), PamMsgStyle::PROMPT_ECHO_ON)?
         .ok_or(PamError::AUTHINFO_UNAVAIL)?;
-    let _ = pamh.syslog(
-        LogLvl::CRIT,
-        &format!("TOTP: {totp:?}"),
-    );
-    let totp = totp.to_string_lossy().to_owned();
+    let totp = totp.to_string_lossy();
 
     // Send direct grant request
     let mut form_data = HashMap::new();
@@ -87,10 +87,6 @@ fn authenticate(
     form_data.insert("totp", totp);
     form_data.insert("grant_type", Cow::Borrowed("password"));
     form_data.insert("scope", Cow::Owned(args.scope));
-    let _ = pamh.syslog(
-        LogLvl::CRIT,
-        &format!("Data: {form_data:?}"),
-    );
 
     let client = Client::new();
     let res = client
@@ -154,16 +150,11 @@ fn authenticate(
                     let _ = pamh.syslog(LogLvl::CRIT, e.to_string().as_str());
                     PamError::AUTH_ERR
                 })?;
-            let _ = pamh.syslog(
-                LogLvl::INFO,
-                &format!(
-                    "User is {res:?}"
-                ),
-            );
+            let _ = pamh.syslog(LogLvl::INFO, &format!("User is {res:?}"));
         }
     }
 
     Ok(PamError::SUCCESS)
 }
 
-pam_module!(PamOidcDirectGrant);
+pam_module!(PamKeycloak);

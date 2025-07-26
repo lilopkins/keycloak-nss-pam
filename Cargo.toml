@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "nss-oidc-direct-grant",
-    "pam-oidc-direct-grant",
+    "nss-keycloak",
+    "pam-keycloak",
 ]
 
 [workspace.package]

@@ -1,0 +1,19 @@
+[package]
+name = "nss-keycloak"
+version = "0.1.0"
+edition = "2024"
+description = "NSS module to authenticate via Keycloak."
+publish.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libc = "0.2.174"
+libnss = "0.9.0"
+reqwest = { version = "0.12.22", default-features = false, features = ["blocking", "json", "http2", "rustls-tls"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.141"
+toml = "0.9.2"
