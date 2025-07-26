@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = [
+    "nss-oidc-direct-grant",
+    "pam-oidc-direct-grant",
+]
+
+[workspace.package]
+publish = false
+license = "MIT"
+authors = [
+    "Lily Hopkins <lily@hpkns.uk>",
+]

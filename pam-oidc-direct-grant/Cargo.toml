@@ -1,0 +1,18 @@
+[package]
+name = "pam-oidc-direct-grant"
+version = "0.1.0"
+edition = "2024"
+description = "PAM module to authenticate via OIDC direct grant."
+publish.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clap = { version = "4.5.41", features = ["derive"] }
+pamsm = { version = "0.5.5", features = ["libpam"] }
+reqwest = { version = "0.12.22", features = ["blocking", "json"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.141"
