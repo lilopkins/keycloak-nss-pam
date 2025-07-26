@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub fn get_first_available_uid(start_uid: libc::uid_t) -> libc::uid_t {
     let mut uid = start_uid;
@@ -8,6 +8,9 @@ pub fn get_first_available_uid(start_uid: libc::uid_t) -> libc::uid_t {
         let status = Command::new("getent")
             .arg("passwd")
             .arg(uid.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .unwrap();
 
