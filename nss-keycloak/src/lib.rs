@@ -3,10 +3,7 @@ use std::{borrow::Cow, collections::HashMap, ffi::CString, panic};
 use libnss::{interop::Response, libnss_passwd_hooks, passwd::PasswdHooks};
 use reqwest::blocking::Client;
 
-use crate::{
-    api_types::UserRepresentation,
-    config::Config,
-};
+use crate::{api_types::UserRepresentation, config::Config};
 
 mod api_types;
 mod config;
@@ -192,12 +189,10 @@ impl PasswdHooks for KeycloakPasswd {
                 ))
                 .bearer_auth(token)
                 .body(serde_json::to_string(&update).unwrap());
-        
+
             log(libc::LOG_DEBUG, format!("{req:?}"));
 
-            let res = req
-                .send()
-                .unwrap();
+            let res = req.send().unwrap();
 
             if !res.status().is_success() {
                 return Response::TryAgain;
