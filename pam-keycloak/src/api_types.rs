@@ -20,8 +20,8 @@ pub enum TokenResponse {
 
 #[derive(Deserialize, Debug)]
 pub struct UserInfoResponse {
-    #[serde(rename = "sub")]
-    _sub: String,
+    pub sub: String,
+    pub uid: String,
 
     #[serde(rename = "email_verified")]
     _email_verified: Option<bool>,

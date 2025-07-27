@@ -1,12 +1,12 @@
 use std::{borrow::Cow, collections::HashMap, ffi::CString, panic};
 
+use config::Config;
 use libnss::{interop::Response, libnss_passwd_hooks, passwd::PasswdHooks};
 use reqwest::blocking::Client;
 
-use crate::{api_types::UserRepresentation, config::Config};
+use crate::api_types::UserRepresentation;
 
 mod api_types;
-mod config;
 mod token;
 mod uid;
 

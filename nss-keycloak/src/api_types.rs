@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
+use config::Config;
 use libnss::passwd::Passwd;
 use serde::{Deserialize, Serialize};
-
-use crate::config::Config;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

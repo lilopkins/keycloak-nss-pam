@@ -1,14 +1,15 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, fs, os::unix, process::Command};
 
-use clap::Parser;
+use copy_dir::copy_dir;
 use pamsm::{LogLvl, PamError, PamLibExt, PamMsgStyle, PamServiceModule, pam_module};
 use reqwest::blocking::Client;
 
-mod args;
-use args::Args;
-
 mod api_types;
 use api_types::{TokenResponse, UserInfoResponse};
+use walkdir::WalkDir;
+
+const DATA_UUID: &str = "keycloak-uuid";
+const DATA_UID: &str = "keycloak-uid";
 
 struct PamKeycloak;
 
@@ -23,48 +24,65 @@ impl PamServiceModule for PamKeycloak {
         }
     }
 
-    fn setcred(_: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
-        PamError::CRED_UNAVAIL
+    fn setcred(pamh: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
+        match pamh.retrieve_bytes(DATA_UUID) {
+            Ok(_uuid) => PamError::SUCCESS,
+            Err(_) => PamError::USER_UNKNOWN,
+        }
     }
 
-    fn acct_mgmt(_: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
-        PamError::SUCCESS
+    fn acct_mgmt(pamh: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
+        match pamh.retrieve_bytes(DATA_UUID) {
+            Ok(_uuid) => PamError::SUCCESS,
+            Err(_) => PamError::USER_UNKNOWN,
+        }
     }
 
-    fn open_session(_: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
-        // TODO Set UID on Keycloak
+    fn open_session(pamh: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
+        if let Ok(uid) = pamh.retrieve_bytes(DATA_UID) {
+            // Parse config
+            config::create_if_not_exists().unwrap();
+            let config = config::read().unwrap();
+
+            let uid = String::from_utf8_lossy(&uid).parse::<u32>().unwrap();
+            let passwd_output = Command::new("getent")
+                .arg("passwd")
+                .arg(uid.to_string())
+                .output()
+                .unwrap();
+
+            let passwd_output = String::from_utf8_lossy(&passwd_output.stdout);
+            let mut passwd_entries = passwd_output.split(':');
+            let home_dir = passwd_entries.nth(6).unwrap();
+
+            // Create home directory if needed
+            if !fs::exists(home_dir).unwrap() {
+                fs::create_dir_all(home_dir).unwrap();
+                copy_dir("/etc/skel", home_dir).unwrap();
+                // Set permissions
+                unix::fs::chown(home_dir, Some(uid), Some(config.group_id)).unwrap();
+                for entry in WalkDir::new(home_dir).into_iter().filter_map(|e| e.ok()) {
+                    unix::fs::chown(entry.path(), Some(uid), Some(config.group_id)).unwrap();
+                }
+            }
+        }
+
         PamError::SUCCESS
     }
 
     fn close_session(_: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
         PamError::SUCCESS
     }
-
-    fn chauthtok(pamh: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
-        let _ = pamh.syslog(
-            LogLvl::WARNING,
-            "Changing OIDC passwords isn't possible via PAM",
-        );
-        PamError::AUTHTOK_ERR
-    }
 }
 
 fn authenticate(
     pamh: pamsm::Pam,
     _flags: pamsm::PamFlags,
-    mut args: Vec<String>,
+    _args: Vec<String>,
 ) -> Result<PamError, PamError> {
-    // Parse arguments
-    let mut args_with_prefix = vec!["pam_oidc_direct_grant".to_owned()];
-    args_with_prefix.append(&mut args);
-    let args = Args::try_parse_from(args_with_prefix).map_err(|e| {
-        let _ = pamh.syslog(
-            LogLvl::CRIT,
-            "The argument's couldn't be parsed for pam_oidc_direct_grant.so!",
-        );
-        let _ = pamh.syslog(LogLvl::CRIT, e.to_string().as_str());
-        PamError::AUTH_ERR
-    })?;
+    // Parse config
+    config::create_if_not_exists().unwrap();
+    let config = config::read().unwrap();
 
     // Read or prompt for username
     let username = pamh.get_user(None)?.ok_or(PamError::AUTHINFO_UNAVAIL)?;
@@ -80,18 +98,20 @@ fn authenticate(
         .ok_or(PamError::AUTHINFO_UNAVAIL)?;
     let totp = totp.to_string_lossy();
 
+    let _ = pamh.syslog(LogLvl::DEBUG, "Sending authentication request");
+
     // Send direct grant request
     let mut form_data = HashMap::new();
     form_data.insert("username", username);
     form_data.insert("password", password);
     form_data.insert("totp", totp);
     form_data.insert("grant_type", Cow::Borrowed("password"));
-    form_data.insert("scope", Cow::Owned(args.scope));
+    form_data.insert("scope", Cow::Owned(config.scopes));
 
     let client = Client::new();
     let res = client
-        .post(args.token_url)
-        .basic_auth(args.client_id, Some(args.client_secret))
+        .post(config.token_url)
+        .basic_auth(config.client_id, Some(config.client_secret))
         .form(&form_data)
         .send()
         .map_err(|e| {
@@ -130,7 +150,7 @@ fn authenticate(
         }
         TokenResponse::Success { access_token, .. } => {
             let res = client
-                .post(args.userinfo_url)
+                .post(config.userinfo_url)
                 .bearer_auth(access_token)
                 .send()
                 .map_err(|e| {
@@ -150,7 +170,9 @@ fn authenticate(
                     let _ = pamh.syslog(LogLvl::CRIT, e.to_string().as_str());
                     PamError::AUTH_ERR
                 })?;
-            let _ = pamh.syslog(LogLvl::INFO, &format!("User is {res:?}"));
+            let _ = pamh.syslog(LogLvl::DEBUG, &format!("User is {res:?}"));
+            let _ = pamh.send_bytes(DATA_UUID, res.sub.into_bytes(), None);
+            let _ = pamh.send_bytes(DATA_UID, res.uid.into_bytes(), None);
         }
     }
 
