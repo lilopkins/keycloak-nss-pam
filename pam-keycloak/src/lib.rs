@@ -84,10 +84,10 @@ impl PamServiceModule for PamKeycloak {
                     }
                 }
             }
-            PamError::SUCCESS
-        } else {
-            PamError::SESSION_ERR
         }
+
+        // Not for us!
+        PamError::SUCCESS
     }
 
     fn close_session(_: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
