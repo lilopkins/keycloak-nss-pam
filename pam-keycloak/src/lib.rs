@@ -1,11 +1,12 @@
 use std::{borrow::Cow, collections::HashMap, fs, os::unix, process::Command};
 
+use common::{config, token::TokenResponse};
 use copy_dir::copy_dir;
 use pamsm::{LogLvl, PamError, PamLibExt, PamMsgStyle, PamServiceModule, pam_module};
 use reqwest::blocking::Client;
 
 mod api_types;
-use api_types::{TokenResponse, UserInfoResponse};
+use api_types::UserInfoResponse;
 use walkdir::WalkDir;
 
 const DATA_UUID: &str = "keycloak-uuid";
@@ -39,6 +40,8 @@ impl PamServiceModule for PamKeycloak {
     }
 
     fn open_session(pamh: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
+        // If we are root, this will be set.
+        // Other users won't have this set as they can't read the config!
         if let Ok(uid) = pamh.retrieve_bytes(DATA_UID) {
             // Parse config
             config::create_if_not_exists().unwrap();
@@ -57,12 +60,34 @@ impl PamServiceModule for PamKeycloak {
 
             // Create home directory if needed
             if !fs::exists(home_dir).unwrap() {
+                let _ = pamh.syslog(
+                    LogLvl::INFO,
+                    &format!("Creating home directory for user {uid} at {home_dir:?}"),
+                );
                 fs::create_dir_all(home_dir).unwrap();
                 copy_dir("/etc/skel", home_dir).unwrap();
                 // Set permissions
                 unix::fs::chown(home_dir, Some(uid), Some(config.group_id)).unwrap();
                 for entry in WalkDir::new(home_dir).into_iter().filter_map(|e| e.ok()) {
                     unix::fs::chown(entry.path(), Some(uid), Some(config.group_id)).unwrap();
+                }
+            }
+        } else if std::env::var("KEYCLOAK_USER").is_ok_and(|v| v == "yes") {
+            // If we're non-root and the home dir doesn't exist, let's try to do what we can.
+            let _ = pamh.syslog(LogLvl::INFO, &format!("Checking for home directory"));
+            if let Some(home_dir) = std::env::home_dir() {
+                let _ = pamh.syslog(
+                    LogLvl::INFO,
+                    &format!("Checking for home directory at {home_dir:?}"),
+                );
+                if !fs::exists(&home_dir).unwrap() {
+                    let _ = pamh.syslog(
+                        LogLvl::INFO,
+                        &format!("Creating home directory at {home_dir:?}"),
+                    );
+                    fs::create_dir_all(&home_dir).unwrap();
+                    copy_dir("/etc/skel", home_dir).unwrap();
+                    // Permissions should be set on copy
                 }
             }
         }
@@ -87,6 +112,17 @@ fn authenticate(
     // Read or prompt for username
     let username = pamh.get_user(None)?.ok_or(PamError::AUTHINFO_UNAVAIL)?;
     let username = username.to_string_lossy();
+
+    // Check if user exists and return early if not.
+    let mut query = HashMap::new();
+    query.insert("exact", Cow::Borrowed("true"));
+    query.insert("username", username.clone());
+    let users = common::api::get_users(&config, query, |v| {
+        let _ = pamh.syslog(LogLvl::DEBUG, &v);
+    }).map_err(|_| PamError::AUTHINFO_UNAVAIL)?;
+    if users.len() != 1 {
+        return Ok(PamError::USER_UNKNOWN);
+    }
 
     // Read or prompt for password
     let password = pamh.get_authtok(None)?.ok_or(PamError::AUTHINFO_UNAVAIL)?;
@@ -173,6 +209,7 @@ fn authenticate(
             let _ = pamh.syslog(LogLvl::DEBUG, &format!("User is {res:?}"));
             let _ = pamh.send_bytes(DATA_UUID, res.sub.into_bytes(), None);
             let _ = pamh.send_bytes(DATA_UID, res.uid.into_bytes(), None);
+            let _ = pamh.putenv("KEYCLOAK_USER=yes");
         }
     }
 

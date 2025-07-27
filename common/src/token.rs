@@ -8,18 +8,13 @@ use serde::Deserialize;
 pub enum TokenResponse {
     Success {
         access_token: String,
-        #[serde(rename = "expires_in")]
-        _expires_in: usize,
-        #[serde(rename = "refresh_token")]
-        _refresh_token: Option<String>,
-        #[serde(rename = "scope")]
-        _scope: String,
+        expires_in: usize,
+        refresh_token: Option<String>,
+        scope: String,
     },
     Failure {
-        #[serde(rename = "error")]
-        _error: String,
-        #[serde(rename = "error_description")]
-        _error_description: Option<String>,
+        error: String,
+        error_description: Option<String>,
     },
 }
 

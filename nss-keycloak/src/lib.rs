@@ -1,13 +1,13 @@
 use std::{borrow::Cow, collections::HashMap, ffi::CString, panic};
 
-use config::Config;
+use common::{
+    api::get_users, config, token
+};
 use libnss::{interop::Response, libnss_passwd_hooks, passwd::PasswdHooks};
 use reqwest::blocking::Client;
 
-use crate::api_types::UserRepresentation;
-
-mod api_types;
-mod token;
+mod api_type_shim;
+use api_type_shim::ToPasswd;
 mod uid;
 
 struct KeycloakPasswd;
@@ -40,7 +40,7 @@ impl PasswdHooks for KeycloakPasswd {
         let mut query = HashMap::new();
         query.insert("max", "9999");
 
-        let res = get_users(&config, query);
+        let res = get_users(&config, query, |v| log(libc::LOG_DEBUG, v));
         if let Err(e) = res {
             log(libc::LOG_ERR, format!("Failed to get user: {e}"));
             return Response::TryAgain;
@@ -92,7 +92,7 @@ impl PasswdHooks for KeycloakPasswd {
         let mut query = HashMap::new();
         query.insert("q", format!("{}:{uid}", config.uid_attribute_id));
 
-        let res = get_users(&config, query);
+        let res = get_users(&config, query, |v| log(libc::LOG_DEBUG, v));
         if let Err(e) = res {
             log(libc::LOG_ERR, format!("Failed to get user: {e}"));
             return Response::TryAgain;
@@ -136,7 +136,7 @@ impl PasswdHooks for KeycloakPasswd {
         query.insert("exact", Cow::Borrowed("true"));
         query.insert("username", Cow::Owned(name));
 
-        let res = get_users(&config, query);
+        let res = get_users(&config, query, |v| log(libc::LOG_DEBUG, v));
         if let Err(e) = res {
             log(libc::LOG_ERR, format!("Failed to get user: {e}"));
             return Response::TryAgain;
@@ -203,37 +203,6 @@ impl PasswdHooks for KeycloakPasswd {
 
         Response::Success(user.to_passwd(&config, uid))
     }
-}
-
-fn get_users<T>(
-    config: &Config,
-    query_parameters: HashMap<&str, T>,
-) -> Result<Vec<UserRepresentation>, Box<dyn std::error::Error>>
-where
-    T: serde::Serialize + Sized,
-{
-    let token =
-        token::get_client_access_token(&config.token_url, &config.client_id, &config.client_secret)
-            .ok_or("")?;
-
-    let client = Client::new();
-
-    if cfg!(debug_assertions) {
-        let res = client
-            .get(format!("{}/realms/{}/users", config.api_url, config.realm))
-            .bearer_auth(&token)
-            .query(&query_parameters)
-            .send()?;
-        log(libc::LOG_DEBUG, res.text().unwrap());
-    }
-
-    let res = client
-        .get(format!("{}/realms/{}/users", config.api_url, config.realm))
-        .bearer_auth(token)
-        .query(&query_parameters)
-        .send()?;
-
-    Ok(res.json::<Vec<UserRepresentation>>()?)
 }
 
 fn openlog() {

@@ -90,11 +90,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
-name = "config"
+name = "common"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "reqwest",
  "serde",
+ "serde_json",
  "toml",
 ]
 
@@ -579,7 +581,7 @@ dependencies = [
 name = "nss-keycloak"
 version = "0.1.0"
 dependencies = [
- "config",
+ "common",
  "libc",
  "libnss",
  "reqwest",
@@ -607,7 +609,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 name = "pam-keycloak"
 version = "0.1.0"
 dependencies = [
- "config",
+ "common",
  "copy_dir",
  "pamsm",
  "reqwest",
