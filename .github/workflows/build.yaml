@@ -56,13 +56,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v0
+        uses: houseabsolute/actions-rust-cross@v1
         with:
           command: "build"
           target: ${{ matrix.platform.target }}
           toolchain: ${{ matrix.toolchain }}
           args: "--locked --release"
           strip: true
+          force-use-cross: true
       - name: Rename NSS binary
         run: mv target/${{ matrix.platform.target }}/release/libnss_keycloak.so target/${{ matrix.platform.target }}/release/libnss_keycloak.so.2
       - name: Rename PAM binary
