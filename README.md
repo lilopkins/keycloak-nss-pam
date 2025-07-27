@@ -1,5 +1,9 @@
 # Keycloak NSS/PAM Modules
 
+> **WARNING**: Do not exclusively use an account managed by these
+> modules to sign in! If the Keycloak server cannot be reached, these
+> accounts will be inaccessible!
+
 ## Building
 
 To build these modules, use cross. This will ensure that a suitable
