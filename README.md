@@ -48,9 +48,14 @@ add after `pam-unix.so`:
 auth [success=1, default=ignore] pam_keycloak.so
 ```
 
-Then in `/etc/pam.d/common-account`, change `pam-unix.so`'s `success=2`,
-add after `pam-unix.so`:
+In `/etc/pam.d/common-account`:
 
 ```
 account [success=1, default=ignore] pam_keycloak.so
+```
+
+In `/etc/pam.d/common-session`:
+
+```
+session required pam_keycloak.so
 ```

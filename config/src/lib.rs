@@ -1,4 +1,4 @@
-use std::{fs, io, path::PathBuf};
+use std::{fs, io, os::unix::fs::PermissionsExt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -49,12 +49,14 @@ pub fn create_if_not_exists() -> Result<(), io::Error> {
             CONFIG_PATH,
             toml::to_string_pretty(&Config::default()).unwrap(),
         )?;
+        fs::set_permissions(CONFIG_PATH, fs::Permissions::from_mode(0o0600))?;
     }
 
     Ok(())
 }
 
 pub fn read() -> Result<Config, io::Error> {
+    fs::set_permissions(CONFIG_PATH, fs::Permissions::from_mode(0o0600))?;
     toml::from_str(&fs::read_to_string(CONFIG_PATH)?)
         .map_err(|_| io::Error::other("failed to deserialize"))
 }
