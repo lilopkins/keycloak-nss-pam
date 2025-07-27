@@ -1,8 +1,6 @@
 use std::{borrow::Cow, collections::HashMap, ffi::CString, panic};
 
-use common::{
-    api::get_users, config, token
-};
+use common::{api::get_users, config, token};
 use libnss::{interop::Response, libnss_passwd_hooks, passwd::PasswdHooks};
 use reqwest::blocking::Client;
 

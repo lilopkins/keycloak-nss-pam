@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, fs, os::unix, process::Command};
+use std::{borrow::Cow, collections::HashMap, fs, os::unix::{self, fs::PermissionsExt}, path::PathBuf};
 
 use common::{config, token::TokenResponse};
 use copy_dir::copy_dir;
@@ -10,7 +10,9 @@ use api_types::UserInfoResponse;
 use walkdir::WalkDir;
 
 const DATA_UUID: &str = "keycloak-uuid";
-const DATA_UID: &str = "keycloak-uid";
+const ENV_UID: &str = "KEYCLOAK_UID";
+const ENV_GID: &str = "KEYCLOAK_GID";
+const ENV_HOME: &str = "KEYCLOAK_HOME";
 
 struct PamKeycloak;
 
@@ -40,59 +42,52 @@ impl PamServiceModule for PamKeycloak {
     }
 
     fn open_session(pamh: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
-        // If we are root, this will be set.
-        // Other users won't have this set as they can't read the config!
-        if let Ok(uid) = pamh.retrieve_bytes(DATA_UID) {
-            // Parse config
-            config::create_if_not_exists().unwrap();
-            let config = config::read().unwrap();
+        if let Ok(Some(uid)) = pamh.getenv(ENV_UID) {
+            let uid = uid.to_string_lossy().parse::<libc::uid_t>().unwrap();
+            let gid = pamh.getenv(ENV_GID).unwrap().unwrap().to_string_lossy().parse::<libc::uid_t>().unwrap();
 
-            let uid = String::from_utf8_lossy(&uid).parse::<u32>().unwrap();
-            let passwd_output = Command::new("getent")
-                .arg("passwd")
-                .arg(uid.to_string())
-                .output()
-                .unwrap();
-
-            let passwd_output = String::from_utf8_lossy(&passwd_output.stdout);
-            let mut passwd_entries = passwd_output.split(':');
-            let home_dir = passwd_entries.nth(6).unwrap();
-
-            // Create home directory if needed
-            if !fs::exists(home_dir).unwrap() {
-                let _ = pamh.syslog(
-                    LogLvl::INFO,
-                    &format!("Creating home directory for user {uid} at {home_dir:?}"),
-                );
-                fs::create_dir_all(home_dir).unwrap();
-                copy_dir("/etc/skel", home_dir).unwrap();
-                // Set permissions
-                unix::fs::chown(home_dir, Some(uid), Some(config.group_id)).unwrap();
-                for entry in WalkDir::new(home_dir).into_iter().filter_map(|e| e.ok()) {
-                    unix::fs::chown(entry.path(), Some(uid), Some(config.group_id)).unwrap();
-                }
-            }
-        } else if std::env::var("KEYCLOAK_USER").is_ok_and(|v| v == "yes") {
             // If we're non-root and the home dir doesn't exist, let's try to do what we can.
-            let _ = pamh.syslog(LogLvl::INFO, &format!("Checking for home directory"));
-            if let Some(home_dir) = std::env::home_dir() {
+            let home_dir = pamh
+                .getenv(ENV_HOME)
+                .map(|v| v.map(|v| v.to_string_lossy()));
+            match home_dir {
+                Err(_) | Ok(None) => return PamError::AUTHINFO_UNAVAIL,
+                _ => (),
+            }
+            let home_dir = PathBuf::from(home_dir.unwrap().unwrap().into_owned());
+            if !fs::exists(&home_dir).unwrap() {
                 let _ = pamh.syslog(
                     LogLvl::INFO,
-                    &format!("Checking for home directory at {home_dir:?}"),
+                    &format!("Creating home directory at {home_dir:?} for {uid}:{gid}"),
                 );
-                if !fs::exists(&home_dir).unwrap() {
+
+                if let Err(e) = copy_dir("/etc/skel", &home_dir) {
                     let _ = pamh.syslog(
-                        LogLvl::INFO,
-                        &format!("Creating home directory at {home_dir:?}"),
+                        LogLvl::ERR,
+                        &format!("Fail to copy skeleton: {e}"),
                     );
-                    fs::create_dir_all(&home_dir).unwrap();
-                    copy_dir("/etc/skel", home_dir).unwrap();
-                    // Permissions should be set on copy
+                    return PamError::SESSION_ERR;
+                }
+
+                for entry in WalkDir::new(&home_dir).into_iter().filter_map(|e| e.ok()) {
+                    if let Err(e) = unix::fs::chown(entry.path(), Some(uid), Some(gid)) {
+                        let _ = pamh.syslog(
+                            LogLvl::WARNING,
+                            &format!("Failed to set owner on {}: {e}", entry.path().display()),
+                        );
+                    }
+                    if let Err(e) = fs::set_permissions(entry.path(), fs::Permissions::from_mode(if entry.path().is_dir() { 0o700 } else { 0o600 })) {
+                        let _ = pamh.syslog(
+                            LogLvl::WARNING,
+                            &format!("Failed to set permissions on {}: {e}", entry.path().display()),
+                        );
+                    }
                 }
             }
+            PamError::SUCCESS
+        } else {
+            PamError::SESSION_ERR
         }
-
-        PamError::SUCCESS
     }
 
     fn close_session(_: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
@@ -119,7 +114,8 @@ fn authenticate(
     query.insert("username", username.clone());
     let users = common::api::get_users(&config, query, |v| {
         let _ = pamh.syslog(LogLvl::DEBUG, &v);
-    }).map_err(|_| PamError::AUTHINFO_UNAVAIL)?;
+    })
+    .map_err(|_| PamError::AUTHINFO_UNAVAIL)?;
     if users.len() != 1 {
         return Ok(PamError::USER_UNKNOWN);
     }
@@ -138,7 +134,7 @@ fn authenticate(
 
     // Send direct grant request
     let mut form_data = HashMap::new();
-    form_data.insert("username", username);
+    form_data.insert("username", username.clone());
     form_data.insert("password", password);
     form_data.insert("totp", totp);
     form_data.insert("grant_type", Cow::Borrowed("password"));
@@ -208,8 +204,16 @@ fn authenticate(
                 })?;
             let _ = pamh.syslog(LogLvl::DEBUG, &format!("User is {res:?}"));
             let _ = pamh.send_bytes(DATA_UUID, res.sub.into_bytes(), None);
-            let _ = pamh.send_bytes(DATA_UID, res.uid.into_bytes(), None);
-            let _ = pamh.putenv("KEYCLOAK_USER=yes");
+            let _ = pamh.putenv(&format!("{ENV_UID}={}", res.uid));
+            let _ = pamh.putenv(&format!("{ENV_GID}={}", config.group_id));
+            let _ = pamh.putenv(&format!(
+                "{ENV_HOME}={}",
+                config
+                    .home_directory_parent
+                    .join(PathBuf::from(username.into_owned()))
+                    .to_str()
+                    .unwrap()
+            ));
         }
     }
 

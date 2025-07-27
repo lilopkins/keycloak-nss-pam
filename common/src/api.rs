@@ -7,7 +7,7 @@ use crate::{api::types::UserRepresentation, config::Config, token};
 pub fn get_users<T, F>(
     config: &Config,
     query_parameters: HashMap<&str, T>,
-    debug_log: F
+    debug_log: F,
 ) -> Result<Vec<UserRepresentation>, Box<dyn std::error::Error>>
 where
     T: serde::Serialize + Sized,
