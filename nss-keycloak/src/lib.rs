@@ -1,11 +1,16 @@
 use std::{borrow::Cow, collections::HashMap, ffi::CString, panic};
 
 use common::{api::get_users, config, token};
-use libnss::{interop::Response, libnss_passwd_hooks, passwd::PasswdHooks};
+use libnss::{
+    interop::Response,
+    libnss_passwd_hooks,
+    passwd::{Passwd, PasswdHooks},
+};
 use reqwest::blocking::Client;
 
-mod api_type_shim;
-use api_type_shim::ToPasswd;
+mod cache;
+mod to_passwd;
+use to_passwd::ToPasswd;
 mod uid;
 
 struct KeycloakPasswd;
@@ -14,7 +19,10 @@ libnss_passwd_hooks!(keycloak, KeycloakPasswd);
 impl PasswdHooks for KeycloakPasswd {
     fn get_all_entries() -> Response<Vec<libnss::passwd::Passwd>> {
         openlog();
-        log(libc::LOG_DEBUG, "get_all_entries");
+        log(
+            libc::LOG_DEBUG,
+            format!("get_all_entries, v{}", env!("CARGO_PKG_VERSION")),
+        );
 
         if config::create_if_not_exists().is_err() {
             log(
@@ -29,7 +37,16 @@ impl PasswdHooks for KeycloakPasswd {
 
         let config = config::read();
         if config.is_err() {
-            log(libc::LOG_WARNING, "Failed to read config!");
+            log(
+                libc::LOG_WARNING,
+                "Failed to read config (might be running as a user, in which case this is normal), trying cache!",
+            );
+
+            if let Some(cache) = cache::cache() {
+                let passwds: Vec<Passwd> = cache.user.iter().map(|u| u.clone().into()).collect();
+                return Response::Success(passwds);
+            }
+
             return Response::TryAgain;
         }
         // SAFETY: just validated
@@ -44,29 +61,34 @@ impl PasswdHooks for KeycloakPasswd {
             return Response::TryAgain;
         }
         let res = res.unwrap();
+        let passwds = res
+            .iter()
+            .filter(|ur| ur.attributes.contains_key(&config.uid_attribute_id))
+            .map(|ur| {
+                ur.to_passwd(
+                    &config,
+                    ur.attributes
+                        .get(&config.uid_attribute_id)
+                        .unwrap()
+                        .first()
+                        .unwrap()
+                        .parse::<libc::uid_t>()
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        cache::update_cache(&passwds.iter().map(Into::into).collect::<Vec<_>>());
         // SAFETY: just validated
-        Response::Success(
-            res.iter()
-                .filter(|ur| ur.attributes.contains_key(&config.uid_attribute_id))
-                .map(|ur| {
-                    ur.to_passwd(
-                        &config,
-                        ur.attributes
-                            .get(&config.uid_attribute_id)
-                            .unwrap()
-                            .first()
-                            .unwrap()
-                            .parse::<libc::uid_t>()
-                            .unwrap(),
-                    )
-                })
-                .collect(),
-        )
+        Response::Success(passwds)
     }
 
     fn get_entry_by_uid(uid: libc::uid_t) -> Response<libnss::passwd::Passwd> {
         openlog();
-        log(libc::LOG_DEBUG, "get_entry_by_uid");
+        log(
+            libc::LOG_DEBUG,
+            format!("get_entry_by_uid, v{}", env!("CARGO_PKG_VERSION")),
+        );
 
         if config::create_if_not_exists().is_err() {
             log(
@@ -81,7 +103,17 @@ impl PasswdHooks for KeycloakPasswd {
 
         let config = config::read();
         if config.is_err() {
-            log(libc::LOG_WARNING, "Failed to read config!");
+            log(
+                libc::LOG_WARNING,
+                "Failed to read config (might be running as a user, in which case this is normal), trying cache!",
+            );
+
+            if let Some(cache) = cache::cache() {
+                let passwds: Vec<Passwd> = cache.user.iter().map(|u| u.clone().into()).collect();
+                if let Some(passwd) = passwds.iter().find(|p| p.uid == uid) {
+                    return Response::Success(passwd.clone());
+                }
+            }
             return Response::TryAgain;
         }
         // SAFETY: just validated
@@ -104,12 +136,17 @@ impl PasswdHooks for KeycloakPasswd {
         let user = res.first().unwrap();
         log(libc::LOG_DEBUG, format!("{user:?}"));
 
-        Response::Success(user.to_passwd(&config, uid))
+        let passwd = user.to_passwd(&config, uid);
+        cache::update_cache(&[(&passwd).into()]);
+        Response::Success(passwd)
     }
 
     fn get_entry_by_name(name: String) -> Response<libnss::passwd::Passwd> {
         openlog();
-        log(libc::LOG_DEBUG, "get_entry_by_name");
+        log(
+            libc::LOG_DEBUG,
+            format!("get_entry_by_name, v{}", env!("CARGO_PKG_VERSION")),
+        );
 
         if config::create_if_not_exists().is_err() {
             log(
@@ -124,7 +161,17 @@ impl PasswdHooks for KeycloakPasswd {
 
         let config = config::read();
         if config.is_err() {
-            log(libc::LOG_WARNING, "Failed to read config!");
+            log(
+                libc::LOG_WARNING,
+                "Failed to read config (might be running as a user, in which case this is normal), trying cache!",
+            );
+
+            if let Some(cache) = cache::cache() {
+                let passwds: Vec<Passwd> = cache.user.iter().map(|u| u.clone().into()).collect();
+                if let Some(passwd) = passwds.iter().find(|p| p.name == name) {
+                    return Response::Success(passwd.clone());
+                }
+            }
             return Response::TryAgain;
         }
         // SAFETY: just validated
@@ -199,7 +246,9 @@ impl PasswdHooks for KeycloakPasswd {
             new_uid
         };
 
-        Response::Success(user.to_passwd(&config, uid))
+        let passwd = user.to_passwd(&config, uid);
+        cache::update_cache(&[(&passwd).into()]);
+        Response::Success(passwd)
     }
 }
 

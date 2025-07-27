@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "nss-keycloak"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "common",
  "libc",
@@ -607,7 +607,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "pam-keycloak"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "common",
  "copy_dir",

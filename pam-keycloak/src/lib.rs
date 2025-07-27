@@ -1,4 +1,10 @@
-use std::{borrow::Cow, collections::HashMap, fs, os::unix::{self, fs::PermissionsExt}, path::PathBuf};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    fs,
+    os::unix::{self, fs::PermissionsExt},
+    path::PathBuf,
+};
 
 use common::{config, token::TokenResponse};
 use copy_dir::copy_dir;
@@ -44,7 +50,13 @@ impl PamServiceModule for PamKeycloak {
     fn open_session(pamh: pamsm::Pam, _: pamsm::PamFlags, _: Vec<String>) -> PamError {
         if let Ok(Some(uid)) = pamh.getenv(ENV_UID) {
             let uid = uid.to_string_lossy().parse::<libc::uid_t>().unwrap();
-            let gid = pamh.getenv(ENV_GID).unwrap().unwrap().to_string_lossy().parse::<libc::uid_t>().unwrap();
+            let gid = pamh
+                .getenv(ENV_GID)
+                .unwrap()
+                .unwrap()
+                .to_string_lossy()
+                .parse::<libc::uid_t>()
+                .unwrap();
 
             // If we're non-root and the home dir doesn't exist, let's try to do what we can.
             let home_dir = pamh
@@ -62,10 +74,7 @@ impl PamServiceModule for PamKeycloak {
                 );
 
                 if let Err(e) = copy_dir("/etc/skel", &home_dir) {
-                    let _ = pamh.syslog(
-                        LogLvl::ERR,
-                        &format!("Fail to copy skeleton: {e}"),
-                    );
+                    let _ = pamh.syslog(LogLvl::ERR, &format!("Fail to copy skeleton: {e}"));
                     return PamError::SESSION_ERR;
                 }
 
@@ -76,10 +85,20 @@ impl PamServiceModule for PamKeycloak {
                             &format!("Failed to set owner on {}: {e}", entry.path().display()),
                         );
                     }
-                    if let Err(e) = fs::set_permissions(entry.path(), fs::Permissions::from_mode(if entry.path().is_dir() { 0o700 } else { 0o600 })) {
+                    if let Err(e) = fs::set_permissions(
+                        entry.path(),
+                        fs::Permissions::from_mode(if entry.path().is_dir() {
+                            0o700
+                        } else {
+                            0o600
+                        }),
+                    ) {
                         let _ = pamh.syslog(
                             LogLvl::WARNING,
-                            &format!("Failed to set permissions on {}: {e}", entry.path().display()),
+                            &format!(
+                                "Failed to set permissions on {}: {e}",
+                                entry.path().display()
+                            ),
                         );
                     }
                 }
